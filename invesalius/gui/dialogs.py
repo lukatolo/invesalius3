@@ -3994,7 +3994,6 @@ class ObjectCalibrationDialog(wx.Dialog):
         name_sizer.AddMany(
             [(lbl_name, 1, wx.ALIGN_CENTER_VERTICAL), (name_box, 1, wx.ALIGN_CENTER_VERTICAL)]
         )
-        # LUKATODO: Add warning about overwriting old coil
 
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         main_sizer.Add(self.interactor, 0, wx.EXPAND)
