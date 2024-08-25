@@ -258,7 +258,6 @@ class InnerFoldPanel(wx.Panel):
             Publisher.sendMessage("Update serial port", serial_port_in_use=False)
 
     # 'Show coil' button
-
     # Called when the 'Show coil' button is pressed elsewhere in code.
     def PressShowCoilButton(self, pressed=False):
         self.show_coil_button.SetValue(pressed)
@@ -269,7 +268,7 @@ class InnerFoldPanel(wx.Panel):
 
     def OnShowCoil(self, evt=None):
         pressed = self.show_coil_button.GetValue()
-        Publisher.sendMessage("Show coil in viewer volume", state=pressed)
+        Publisher.sendMessage("Show coil in viewer volume", state=pressed, coil_name=None)
 
     def CollapseNavigation(self, done):
         if not done:  # Coil selection is no longer complete, so hide navigation panel
@@ -1327,6 +1326,7 @@ class ControlPanel(wx.Panel):
         show_coil_button.SetValue(False)
         show_coil_button.Enable(True)
         show_coil_button.Bind(wx.EVT_TOGGLEBUTTON, self.OnShowCoil)
+        show_coil_button.Bind(wx.EVT_RIGHT_DOWN, self.ShowCoilChoice)
         self.show_coil_button = show_coil_button
 
         # Toggle button for showing probe during navigation
@@ -1744,10 +1744,24 @@ class ControlPanel(wx.Panel):
         self.EnableToggleButton(self.show_coil_button, enabled)
         self.UpdateToggleButton(self.show_coil_button)
 
-    def OnShowCoil(self, evt=None):
+    def ShowCoilChoice(self, evt):
+        coil_names = list(self.navigation.coil_registrations)
+
+        show_coil_menu = wx.Menu()
+        for coil_name in coil_names:
+            item = wx.MenuItem(show_coil_menu, wx.ID_ANY, coil_name)
+            self.Bind(
+                wx.EVT_MENU, lambda evt, name=coil_name: self.OnShowCoil(coil_name=name), item
+            )
+            show_coil_menu.Append(item)
+
+        self.PopupMenu(show_coil_menu, evt.GetPosition())
+        show_coil_menu.Destroy()
+
+    def OnShowCoil(self, evt=None, coil_name=None):
         self.UpdateToggleButton(self.show_coil_button)
         pressed = self.show_coil_button.GetValue()
-        Publisher.sendMessage("Show coil in viewer volume", state=pressed)
+        Publisher.sendMessage("Show coil in viewer volume", state=pressed, coil_name=coil_name)
 
     # 'Show probe' button
     def PressShowProbeButton(self, pressed=False):
