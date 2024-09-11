@@ -155,7 +155,7 @@ class Robot(metaclass=Singleton):
         return self.is_robot_connected
 
     def IsReady(self):  # LUKATODO: use this check before enabling robot for navigation...
-        self.IsConnected() and (self.coil_name in self.navigation.coil_registrations)
+        return self.IsConnected() and (self.coil_name in self.navigation.coil_registrations)
 
     def SetRobotIP(self, data):
         if data is not None:
