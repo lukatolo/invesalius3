@@ -529,21 +529,15 @@ def DebugCoordRandom(tracker_connection: "TrackerConnection", tracker_id: int, r
     dx = [-30, 30]
     dt = [-180, 180]
 
-    coord1 = np.array(
-        [uniform(*dx), uniform(*dx), uniform(*dx), uniform(*dt), uniform(*dt), uniform(*dt)]
-    )
-    coord2 = np.array(
-        [uniform(*dx), uniform(*dx), uniform(*dx), uniform(*dt), uniform(*dt), uniform(*dt)]
-    )
-    coord3 = np.array(
-        [uniform(*dx), uniform(*dx), uniform(*dx), uniform(*dt), uniform(*dt), uniform(*dt)]
-    )
-    coord4 = np.array(
-        [uniform(*dx), uniform(*dx), uniform(*dx), uniform(*dt), uniform(*dt), uniform(*dt)]
-    )
-    coord5 = np.array(
-        [uniform(*dx), uniform(*dx), uniform(*dx), uniform(*dt), uniform(*dt), uniform(*dt)]
-    )
+    n_coils = 4 # How many coil coordinates to generate
+    n_coords = 2 + n_coils
+    coords = []
+
+    for i in range(n_coords):
+        coord = np.array(
+            [uniform(*dx), uniform(*dx), uniform(*dx), uniform(*dt), uniform(*dt), uniform(*dt)]
+        )
+        coords.append(coord)
 
     sleep(0.15)
 
@@ -561,9 +555,9 @@ def DebugCoordRandom(tracker_connection: "TrackerConnection", tracker_id: int, r
 
     # Always make the markers visible when using debug tracker; this enables registration, as it
     # is not possible to registering without markers.
-    marker_visibilities = [True, True, True, True, True]
+    marker_visibilities = [True] * n_coords
 
-    return np.vstack([coord1, coord2, coord3, coord4, coord5]), marker_visibilities
+    return np.vstack(coords), marker_visibilities
 
 
 def coordinates_to_transformation_matrix(
