@@ -62,6 +62,7 @@ class Marker:
     y_seed: float = 0
     z_seed: float = 0
     is_target: bool = False
+    target_coil_name: str = None
     is_point_of_interest: bool = False
     session_id: int = 1
     x_cortex: float = 0
@@ -210,6 +211,7 @@ class Marker:
             "size": self.size,
             "label": self.label,
             "is_target": self.is_target,
+            "target_coil_name": self.target_coil_name,
             "is_point_of_interest": self.is_point_of_interest,
             "marker_type": self.marker_type.value,
             "seed": self.seed,
@@ -276,6 +278,7 @@ class Marker:
         self.size = d["size"]
         self.label = d["label"]
         self.is_target = d["is_target"]
+        self.target_coil_name = d["target_coil_name"]
         self.session_id = d["session_id"]
 
         self.position = position
@@ -308,5 +311,6 @@ class Marker:
 
         # Unset the is_target attribute.
         new_marker.is_target = False
+        new_marker.target_coil_name = None
 
         return new_marker

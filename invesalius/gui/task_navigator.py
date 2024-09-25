@@ -2527,14 +2527,39 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
         )
         self.markers.ChangeLabel(marker, new_label)
 
+    def SetTargetToCoil(self, coil_name):
+        self.target_coil_name = coil_name 
+
     def OnMenuSetTarget(self, evt):
         idx = self.marker_list_ctrl.GetFocusedItem()
         if idx == -1:
             wx.MessageBox(_("No data selected."), _("InVesalius 3"))
             return
 
+        if self.navigation.n_coils > 1: # Only in multicoil mode
+            # Ask for which coil this target is for
+            self.target_coil_name = None
+
+            coil_menu = wx.Menu()
+            for coil_name in self.navigation.coil_registrations:
+                coil_menu_item = coil_menu.Append(wx.ID_ANY, coil_name)
+
+                self.Bind(
+                    wx.EVT_MENU,
+                    lambda event, coil_name=coil_name: self.SetTargetToCoil(coil_name),
+                    coil_menu_item
+                )
+            self.PopupMenu(coil_menu)
+            coil_menu.Destroy()
+
+            if self.target_coil_name is None: 
+                # No coil selected, return early without setting target
+                return
+        else: # Use the name of the single coil
+            self.target_coil_name = next(iter(self.navigation.coil_registrations))
+
         marker_id = self.__get_marker_id(idx)
-        self.markers.SetTarget(marker_id)
+        self.markers.SetTarget(marker_id, n_coils=self.navigation.n_coils, target_coil_name=self.target_coil_name)
 
     def _SetTarget(self, marker):
         idx = self.__find_marker_index(marker.marker_id)
