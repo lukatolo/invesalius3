@@ -571,6 +571,10 @@ class Navigation(metaclass=Singleton):
 
             coreg_data = [self.m_change, self.r_stylus]
 
+            # Initialize multicoil TargetViewer if in multicoil mode
+            if self.n_coils > 1:
+                Publisher.sendMessage("Initialize target viewer", navigation=self, tracker=tracker)
+
             robot = Robot()
             if robot.IsReady():
                 # Tell robot at which index (obj_id) to find its coil in (relevant when there are multiple coils)
