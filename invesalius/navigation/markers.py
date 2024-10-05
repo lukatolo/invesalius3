@@ -123,35 +123,46 @@ class MarkersControl(metaclass=Singleton):
 
         self.SaveState()
 
-    def SetTarget(self, marker_id, check_for_previous=True):
-        # Set robot objective to NONE when a new target is selected. This prevents the robot from
-        # automatically moving to the new target (which would be the case if robot objective was previously
-        # set to TRACK_TARGET). Preventing the automatic moving makes robot movement more explicit and predictable.
-        self.robot.SetObjective(RobotObjective.NONE)
+    def SetTarget(self, marker_id, check_for_previous=True, n_coils=1, target_coil_name=None):
+        if n_coils == 1:
+            # Set robot objective to NONE when a new target is selected. This prevents the robot from
+            # automatically moving to the new target (which would be the case if robot objective was previously
+            # set to TRACK_TARGET). Preventing the automatic moving makes robot movement more explicit and predictable.
+            self.robot.SetObjective(RobotObjective.NONE)
 
-        if check_for_previous:
-            prev_target = self.FindTarget()
+            if check_for_previous:
+                prev_target = self.FindTarget()
 
-            # If the new target is same as the previous do nothing.
-            if prev_target and prev_target.marker_id == marker_id:
-                return
+                # If the new target is same as the previous do nothing.
+                if prev_target and prev_target.marker_id == marker_id:
+                    return
 
-            # Unset the previous target
-            if prev_target is not None:
-                self.UnsetTarget(prev_target.marker_id)
+                # Unset the previous target
+                if prev_target is not None:
+                    self.UnsetTarget(prev_target.marker_id)
 
-        # Set new target
-        marker = self.list[marker_id]
-        marker.is_target = True
+            # Set new target
+            marker = self.list[marker_id]
+            marker.is_target = True
 
-        Publisher.sendMessage("Set target", marker=marker)
-        Publisher.sendMessage("Set target transparency", marker=marker, transparent=True)
+            Publisher.sendMessage("Set target", marker=marker)
+            Publisher.sendMessage("Set target transparency", marker=marker, transparent=True)
 
-        # When setting a new target, automatically switch into target mode. Note that the order is important here:
-        # first set the target, then move into target mode.
-        Publisher.sendMessage("Press target mode button", pressed=True)
+            # When setting a new target, automatically switch into target mode. Note that the order is important here:
+            # first set the target, then move into target mode.
+            Publisher.sendMessage("Press target mode button", pressed=True)
 
-        self.SaveState()
+            self.SaveState()
+
+        else:  # multicoil mode
+            # Set new target
+            marker = self.list[marker_id]
+            marker.is_target = True
+            marker.target_coil_name = target_coil_name
+            Publisher.sendMessage("Set target", marker=marker)
+            Publisher.sendMessage("Set target transparency", marker=marker, transparent=True)
+
+            self.SaveState()  # LUKATODO: will this cause issues?
 
     def SetPointOfInterest(self, marker_id):
         # Find the previous point of interest
