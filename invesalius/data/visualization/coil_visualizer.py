@@ -6,8 +6,6 @@ import invesalius.constants as const
 import invesalius.data.polydata_utils as pu
 import invesalius.data.vtk_utils as vtku
 import invesalius.session as ses
-from invesalius.navigation.navigation import Navigation
-from invesalius.navigation.tracker import Tracker
 from invesalius.pubsub import pub as Publisher
 
 
@@ -24,10 +22,6 @@ class CoilVisualizer:
 
     def __init__(self, renderer, actor_factory, vector_field_visualizer):
         self.renderer = renderer
-        self.tracker = Tracker()
-
-        # Keeps track of whether tracker fiducials have been set.
-        self.tracker_fiducials_set = self.tracker.AreTrackerFiducialsSet()
 
         # The actor factory is used to create actors for the coil and coil center.
         self.actor_factory = actor_factory
