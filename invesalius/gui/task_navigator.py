@@ -1636,9 +1636,10 @@ class ControlPanel(wx.Panel):
         self.navigation.StopNavigation()
 
     def UnsetTarget(self, marker):
-        self.navigation.target = None
-        self.target_selected = False
-        self.UpdateTargetButton()
+        if self.navigation.n_coils == 1:
+            self.navigation.target = None  # LUKATODO: remove
+            self.target_selected = False
+            self.UpdateTargetButton()
 
     def SetTarget(self, marker):
         coord = marker.position + marker.orientation
@@ -2626,7 +2627,7 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
             self.marker_list_ctrl.GetItemText(list_index, const.LABEL_COLUMN)
         )
         self.markers.ChangeLabel(marker, new_label)
-        
+
     def SetTargetToCoil(self, coil_name):
         self.target_coil_name = coil_name
 
@@ -2636,36 +2637,44 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
             wx.MessageBox(_("No data selected."), _("InVesalius 3"))
             return
 
-        if self.navigation.n_coils > 1: # Only in multicoil mode
+        if self.navigation.n_coils > 1:  # Only in multicoil mode
             # Ask for which coil this target is for
             self.target_coil_name = None
 
+            coils_with_target = set(
+                [marker.target_coil_name for marker in self.markers.list if marker.is_target]
+            )
+            coils_without_target = set(self.navigation.coil_registrations).difference(
+                coils_with_target
+            )
+
             coil_menu = wx.Menu()
-            for coil_name in self.navigation.coil_registrations:
+            for coil_name in coils_without_target:
                 coil_menu_item = coil_menu.Append(wx.ID_ANY, coil_name)
 
                 self.Bind(
                     wx.EVT_MENU,
                     lambda event, coil_name=coil_name: self.SetTargetToCoil(coil_name),
-                    coil_menu_item
+                    coil_menu_item,
                 )
             self.PopupMenu(coil_menu)
             coil_menu.Destroy()
 
-            if self.target_coil_name is None: 
-                return # No coil selected, return early without setting target
-                
-        else: # Use the name of the single coil
+            if self.target_coil_name is None:
+                return  # No coil selected, return early without setting target
+
+        else:  # Use the name of the single coil
             self.target_coil_name = next(iter(self.navigation.coil_registrations))
 
         marker_id = self.__get_marker_id(idx)
-        self.markers.SetTarget(marker_id, n_coils=self.navigation.n_coils, target_coil_name=self.target_coil_name)
-
+        self.markers.SetTarget(
+            marker_id, n_coils=self.navigation.n_coils, target_coil_name=self.target_coil_name
+        )
 
     def _SetTarget(self, marker):
         idx = self.__find_marker_index(marker.marker_id)
         self.marker_list_ctrl.SetItemBackgroundColour(idx, "RED")
-        self.marker_list_ctrl.SetItem(idx, const.TARGET_COLUMN, _("Yes"))
+        self.marker_list_ctrl.SetItem(idx, const.TARGET_COLUMN, _(f"{marker.target_coil_name}"))
 
         target_uuid = marker.marker_uuid
 
@@ -2875,10 +2884,11 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
         self.markers.ChangeMEP(marker, new_mep)
 
     def _UnsetTarget(self, marker):
-        idx = self.__find_marker_index(marker.marker_id)
+        if self.navigation.n_coils == 1:
+            # When unsetting a target, automatically unpress the target mode button.
+            Publisher.sendMessage("Press target mode button", pressed=False)
 
-        # When unsetting a target, automatically unpress the target mode button.
-        Publisher.sendMessage("Press target mode button", pressed=False)
+        idx = self.__find_marker_index(marker.marker_id)
 
         # Update the marker list control.
         self.marker_list_ctrl.SetItemBackgroundColour(idx, "white")
