@@ -19,12 +19,27 @@
 import os
 import sys
 
+from functools import partial
+import numpy as np
+
 import wx
 import wx.lib.agw.fourwaysplitter as fws
 import wx.lib.colourselect as csel
 import wx.lib.platebtn as pbtn
 
+from vtkmodules.wx.wxVTKRenderWindowInteractor import wxVTKRenderWindowInteractor
+from vtkmodules.vtkRenderingCore import (
+    vtkActor,
+    vtkPolyDataMapper,
+    vtkRenderer,
+)
+from vtkmodules.vtkCommonMath import vtkMatrix4x4
+from vtkmodules.vtkCommonTransforms import vtkTransform
+from invesalius.math_utils import inner1d
+
 import invesalius.constants as const
+import invesalius.data.vtk_utils as vtku
+import invesalius.data.coordinates as dco
 import invesalius.data.viewer_slice as slice_viewer
 import invesalius.data.viewer_volume as volume_viewer
 import invesalius.gui.widgets.slice_menu as slice_menu_
@@ -41,6 +56,12 @@ from invesalius.gui.widgets.clut_raycasting import (
 from invesalius.i18n import tr as _
 from invesalius.pubsub import pub as Publisher
 
+# Required for coil visualization
+from invesalius.navigation.markers import MarkersControl
+from invesalius.data.actor_factory import ActorFactory
+from invesalius.data.visualization.vector_field_visualizer import VectorFieldVisualizer
+from invesalius.data.visualization.target_coil_visualizer import TargetCoilVisualizer
+
 
 class Panel(wx.Panel):
     def __init__(self, parent):
@@ -49,8 +70,6 @@ class Panel(wx.Panel):
         self.__init_aui_manager()
         self.__bind_events_wx()
         self.__bind_events()
-        # self.__init_four_way_splitter()
-        # self.__init_mix()
 
     def __init_aui_manager(self):
         self.aui_manager = wx.aui.AuiManager()
@@ -200,7 +219,7 @@ class VolumeInteraction(wx.Panel):
         self.aui_manager = wx.aui.AuiManager()
         self.aui_manager.SetManagedWindow(self)
 
-        p1 = volume_viewer.Viewer(self)
+        self.volume_viewer = p1 = volume_viewer.Viewer(self)
         s1 = (
             wx.aui.AuiPaneInfo().Centre().CloseButton(False).MaximizeButton(False).CaptionVisible(0)
         )
@@ -306,14 +325,328 @@ class VolumeViewerCover(wx.Panel):
     def __init__(self, parent):
         wx.Panel.__init__(self, parent)
 
-        sizer = wx.BoxSizer(wx.HORIZONTAL)
-        sizer.Add(VolumeInteraction(self, -1), 1, wx.EXPAND | wx.GROW)
-        sizer.Add(VolumeToolPanel(self), 0, wx.EXPAND | wx.GROW)
+        self.volume_interaction = VolumeInteraction(self, -1)
+        self.volume_tool_panel = VolumeToolPanel(self)
+
+        self.target_viewer = None  # Initialized through pubsub msg when navigation is started
+        self.target_viewer_initialized = False
+        self.target_viewer_enabled = False
+
+        self.sizer = sizer = wx.BoxSizer(wx.HORIZONTAL)
+        sizer.Add(self.volume_interaction, 1, wx.EXPAND | wx.GROW)
+        sizer.Add(self.volume_tool_panel, 0, wx.EXPAND | wx.GROW)
         sizer.Fit(self)
+
+        self.n_targets = 0  # Keep track of how many targets have been created
 
         self.SetSizer(sizer)
         self.Update()
         self.SetAutoLayout(1)
+
+        self.__bind_events()
+
+    def __bind_events(self):
+        Publisher.subscribe(self.InitializeTargetViewer, "Initialize target viewer")
+        Publisher.subscribe(self.EnableTargetViewer, "Set target mode")
+        Publisher.subscribe(self.OnSetTarget, "Set target")
+        Publisher.subscribe(self.OnUnsetTarget, "Unset target")
+
+    def InitializeTargetViewer(self, navigation, tracker):
+        # Remove old TargetViewer if it exists
+        for idx, child in enumerate(self.sizer.GetChildren()):
+            if child.GetWindow() == self.target_viewer:
+                self.sizer.Remove(idx)
+
+        self.target_viewer = TargetViewer(
+            self, self.volume_interaction.volume_viewer.surface, navigation, tracker
+        )
+        self.target_viewer.Show(False)  # Hide target viewer initially
+        self.sizer.Add(self.target_viewer, 1, wx.EXPAND | wx.GROW)
+
+        # Enable TargetViewer if it was enabled prior to re-initialization
+        self.EnableTargetViewer(self.target_viewer_enabled)
+
+        self.target_viewer_initialized = True
+
+    def EnableTargetViewer(self, enabled=True):
+        # Show/hide viewer_volume/target_viewer so that only one is shown at a time
+        if self.target_viewer_initialized:
+            # Show/hide normal viewer_volume (volume_interaction+volume_tool_panel)
+            self.volume_interaction.Show(not enabled)
+            self.volume_tool_panel.Show(not enabled)
+            self.target_viewer.ShowTargetViewer(enabled)
+            self.sizer.Layout()
+            self.Update()
+            self.target_viewer_enabled = enabled
+
+    def OnSetTarget(self, marker):
+        if self.target_viewer_initialized:
+            target_coil_name = marker.target_coil_name
+
+            # Find the relevant coil panel and add the target to this
+            for target_coil_panel in self.target_viewer.aui_manager.GetAllPanes():
+                if target_coil_panel.name == target_coil_name:
+                    target_coil_panel.window.SetTarget(marker)
+                    self.n_targets += 1
+
+    def OnUnsetTarget(self, marker):
+        if self.target_viewer_initialized:
+            target_coil_name = marker.target_coil_name
+
+            # Find the relevant coil panel and remove the target from this
+            for target_coil_panel in self.target_viewer.aui_manager.GetAllPanes():
+                if target_coil_panel.name == target_coil_name:
+                    target_coil_panel.window.UnsetTarget()
+                    self.n_targets -= 1
+
+                    if (
+                        self.n_targets == 0
+                    ):  # All targets were unset, so exit target mode automatically
+                        Publisher.sendMessage("Press target mode button", pressed=False)
+                    return
+
+
+class TargetViewer(wx.Panel):
+    # LUKATODO: this is initialized when navigation is started
+    def __init__(self, parent, surface_actor, navigation, tracker):
+        wx.Panel.__init__(self, parent)
+        self.SetBackgroundColour(const.RED_COLOR_RGB)
+
+        self.surface_actor = surface_actor
+        self.navigation = navigation
+        self.tracker = tracker
+
+        self.__init_aui_manager()
+
+    def __init_aui_manager(self):
+        self.aui_manager = wx.aui.AuiManager()
+        self.aui_manager.SetManagedWindow(self)
+
+        # Add a pane for each coil
+        for idx, coil_name in enumerate(self.navigation.coil_registrations):
+            coil = self.navigation.coil_registrations[coil_name].copy()
+            coil["name"] = coil_name
+            p = TargetCoilPanel(self, coil)
+            s = (
+                wx.aui.AuiPaneInfo()
+                .Row(idx // 2)  # 2 panes per row
+                .Name(coil_name)
+                # .Bottom()
+                .Centre()
+                .Caption(coil_name)
+                .MaximizeButton(True)
+                .CloseButton(False)
+            )
+            self.aui_manager.AddPane(p, s)
+        self.aui_manager.Update()
+
+    def ShowTargetViewer(self, show=True):
+        self.Show(show)
+        for pane in self.aui_manager.GetAllPanes():  # Show/hide all  TargetCoilPanels
+            pane.Show(show)
+
+
+class TargetCoilPanel(wx.Panel):
+    def __init__(self, parent, coil):
+        wx.Panel.__init__(self, parent)
+        self.interactor = wxVTKRenderWindowInteractor(self, -1)
+
+        self.renderer = vtkRenderer()  # Renderer for showing coil
+        self.interactor.GetRenderWindow().AddRenderer(self.renderer)
+
+        self.target_guide_renderer = vtkRenderer()  # Renderer for showing target info
+        self.interactor.GetRenderWindow().AddRenderer(self.target_guide_renderer)
+
+        self.sizer = sizer = wx.BoxSizer(wx.VERTICAL)
+        self._init_gui()
+
+        # Load the actor of the head surface
+        self.LoadActor(parent.surface_actor)
+
+        # Target info
+        self.target_coord = None
+        self.m_target = None
+
+        # Objects required for TargetCoilVisualizer
+        self.markers = (
+            MarkersControl()
+        )  # This is a singleton, so the same one used by the whole program
+        self.coil = coil
+        self.actor_factory = ActorFactory()
+        self.vector_field_visualizer = VectorFieldVisualizer(self.actor_factory)
+
+        self.target_coil_visualizer = TargetCoilVisualizer(
+            self,
+            self.coil,
+            self.interactor,
+            self.renderer,
+            self.target_guide_renderer,
+            self.actor_factory,
+            self.vector_field_visualizer,
+        )
+
+        # Check existing markers for a target for this coil
+        coil_name = self.coil["name"]
+        for marker in self.markers.list:
+            if marker.target_coil_name == coil_name:
+                self.SetTarget(marker)
+
+        self.SetSizer(sizer)
+        sizer.Fit(self)
+        self.Update()
+
+    def _init_gui(self) -> None:
+        # Toggle Button for Target Mode (Target mode button just shows/hides target_guide for now)
+        BMP_TARGET = wx.Bitmap(str(inv_paths.ICON_DIR.joinpath("target.png")), wx.BITMAP_TYPE_PNG)
+        self.target_mode_button = target_mode_button = wx.ToggleButton(
+            self, -1, "", style=pbtn.PB_STYLE_SQUARE, size=ICON_SIZE
+        )
+        target_mode_button.SetBackgroundColour(const.RED_COLOR_RGB)
+        target_mode_button.SetBitmap(BMP_TARGET)
+        target_mode_button.SetValue(False)
+        target_mode_button.SetToolTip(_("Target mode"))
+        target_mode_button.Bind(wx.EVT_TOGGLEBUTTON, self.SetTargetMode)
+
+        # Toggle button for tracking target with robot during navigation
+        BMP_TRACK_TARGET = wx.Bitmap(
+            str(inv_paths.ICON_DIR.joinpath("robot_track_target.png")), wx.BITMAP_TYPE_PNG
+        )
+        self.robot_track_target_button = robot_track_target_button = wx.ToggleButton(
+            self, -1, "", style=pbtn.PB_STYLE_SQUARE, size=ICON_SIZE
+        )
+        robot_track_target_button.SetBackgroundColour(const.RED_COLOR_RGB)
+        robot_track_target_button.SetBitmap(BMP_TRACK_TARGET)
+        robot_track_target_button.SetValue(False)
+        robot_track_target_button.SetToolTip(_("Track target with robot"))
+        robot_track_target_button.Bind(
+            wx.EVT_TOGGLEBUTTON,
+            partial(self.OnRobotTrackButton, ctrl=robot_track_target_button),
+        )
+
+        # Toggle button for moving robot away from head
+        BMP_ENABLE_MOVE_AWAY = wx.Bitmap(
+            str(inv_paths.ICON_DIR.joinpath("robot_move_away.png")), wx.BITMAP_TYPE_PNG
+        )
+        self.robot_move_away_button = robot_move_away_button = wx.ToggleButton(
+            self, -1, "", style=pbtn.PB_STYLE_SQUARE, size=ICON_SIZE
+        )
+        robot_move_away_button.SetBackgroundColour(const.RED_COLOR_RGB)
+        robot_move_away_button.SetBitmap(BMP_ENABLE_MOVE_AWAY)
+        robot_move_away_button.SetValue(False)
+        robot_move_away_button.SetToolTip(_("Move robot away from head"))
+        robot_move_away_button.Bind(
+            wx.EVT_TOGGLEBUTTON, partial(self.OnMoveRobotAwayButton, ctrl=robot_move_away_button)
+        )
+
+        buttons_sizer = wx.FlexGridSizer(3, 5, 5)
+        buttons_sizer.AddMany(
+            [
+                (target_mode_button),
+                (robot_track_target_button),
+                (robot_move_away_button),
+            ]
+        )
+
+        # Panel for buttons
+        button_panel = wx.Panel(self, -1)  # , style=wx.TRANSPARENT_WINDOW)
+        button_panel.SetBackgroundColour(wx.Colour(255, 255, 255, 0))  # Transparent background
+
+        button_panel_sizer = wx.BoxSizer(wx.VERTICAL)
+        # button_panel_sizer.Add(button_panel, 0, wx.ALIGN_RIGHT | wx.ALIGN_TOP)
+        button_panel_sizer.Add(button_panel, 0, wx.ALIGN_LEFT | wx.ALIGN_TOP)
+
+        # self.sizer.Add(button_panel_sizer, 0, wx.ALIGN_TOP | wx.ALIGN_RIGHT, wx.ALL, 5)
+        self.sizer.Add(self.interactor, 1, wx.EXPAND)
+        self.sizer.Add(button_panel_sizer, 0, wx.ALIGN_TOP | wx.ALIGN_LEFT, wx.ALL, 5)
+        button_panel.Raise()  # LUKATODO: Keep on top
+
+    def LoadActor(self, actor) -> None:
+        self.renderer.AddActor(actor)
+        self.renderer.ResetCamera()
+        self.interactor.Render()
+
+    #### Functions for buttons
+    def UpdateToggleButton(self, ctrl, state=None):
+        if state is None:
+            state = ctrl.GetValue()
+        state_color = const.GREEN_COLOR_RGB if state else const.RED_COLOR_RGB
+        ctrl.SetValue(state)
+        ctrl.SetBackgroundColour(state_color)
+
+    def SetTargetMode(self, event=None, target_mode_on=True):
+        if event is not None:
+            target_mode_on = event.GetValue()
+        self.UpdateToggleButton(self.target_mode_button, state=target_mode_on)
+        # Turn on target mode for this coil panel, LUKATODO: delete this? targeting is always on here
+        pass
+
+    def OnRobotTrackButton(self, event, ctrl):
+        # Let the robot take over targeting
+        self.UpdateToggleButton(ctrl)
+        pass
+
+    def OnMoveRobotAwayButton(self, event, ctrl):
+        # Move the coil away
+        # LUKATODO: copy OnRobotMoveAwayButton, but any robot checks should be done in the Robot, not in here
+        self.UpdateToggleButton(ctrl)
+        pass
+
+    ####
+    def SetTarget(self, marker):
+        coord = marker.position + marker.orientation
+        coord[1] = -coord[1]
+        self.target_coord = coord
+
+        # Create transformation matrix for the target
+        self.m_target = self.actor_factory.CreateVTKObjectMatrix(coord[:3], coord[3:])
+
+        self.target_coil_visualizer.SetTarget(coord, self.m_target)
+
+        self.SetTargetMode(target_mode_on=True)  # automatically set target mode on
+        self.SetCameraTarget()  # Automatically set the camera to align with target
+
+    def UnsetTarget(self):
+        self.target_coord = None
+        self.m_target = None
+        self.target_coil_visualizer.SetTarget(None, None)
+        self.SetTargetMode(target_mode_on=False)  # automatically set target mode off
+
+    def SetCameraTarget(self):
+        if self.target_coord is not None:
+            cam_focus = self.target_coord[0:3]
+            cam = self.renderer.GetActiveCamera()
+
+            oldcamVTK = vtkMatrix4x4()
+            oldcamVTK.DeepCopy(cam.GetViewTransformMatrix())
+
+            newvtk = vtkMatrix4x4()
+            newvtk.Multiply4x4(self.m_target, oldcamVTK, newvtk)
+
+            transform = vtkTransform()
+            transform.SetMatrix(newvtk)
+            transform.Update()
+            cam.ApplyTransform(transform)
+
+            cam.Roll(90)
+
+            cam_pos0 = np.array(cam.GetPosition())
+            cam_focus0 = np.array(cam.GetFocalPoint())
+            v0 = cam_pos0 - cam_focus0
+            v0n = np.sqrt(inner1d(v0, v0))
+
+            v1 = np.array(
+                [
+                    cam_focus[0] - cam_focus0[0],
+                    cam_focus[1] - cam_focus0[1],
+                    cam_focus[2] - cam_focus0[2],
+                ]
+            )
+            v1n = np.sqrt(inner1d(v1, v1))
+            if not v1n:
+                v1n = 1.0
+            cam_pos = (v1 / v1n) * v0n + cam_focus
+            cam.SetFocalPoint(cam_focus)
+            cam.SetPosition(cam_pos)
 
 
 class VolumeToolPanel(wx.Panel):
