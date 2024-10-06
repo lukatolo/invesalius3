@@ -182,7 +182,7 @@ class Robot(metaclass=Singleton):
 
     def SendTargetToRobot(self):
         # If the target is not set, return early.
-        if self.target is None:
+        if self.target or self.coil_name is None:
             return False
 
         navigation = self.navigation

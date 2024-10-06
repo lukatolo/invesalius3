@@ -442,22 +442,41 @@ class TargetViewer(wx.Panel):
 
     def ShowTargetViewer(self, show=True):
         self.Show(show)
-        for pane in self.aui_manager.GetAllPanes():  # Show/hide all  TargetCoilPanels
+        for pane in self.aui_manager.GetAllPanes():  # Show/hide all TargetCoilPanels
             pane.Show(show)
 
+class InteractorPanel(wx.Panel):
+    # interactors [interactor = wxVTKRenderWindowInteractor(self, -1)] need to be wrapped in a wx.Panel
+    # This is so that TargetCoilPanel (which has interactor) can be sized correctly
+    def __init__(self, parent):
+        wx.Panel.__init__(self, parent)
+        self.SetBackgroundColour(wx.Colour(0, 0, 0))
+
+        self.interactor = wxVTKRenderWindowInteractor(self, -1)
+
+        sizer = wx.BoxSizer()
+        sizer.Add(self.interactor, 1, wx.EXPAND)
+        self.sizer = sizer
+        self.SetSizer(sizer)
+        self.Layout()
+
+    def GetInteractor(self):
+        return self.interactor
 
 class TargetCoilPanel(wx.Panel):
     def __init__(self, parent, coil):
         wx.Panel.__init__(self, parent)
-        self.interactor = wxVTKRenderWindowInteractor(self, -1)
 
-        self.renderer = vtkRenderer()  # Renderer for showing coil
+        self.interactor_panel = InteractorPanel(self) 
+        self.interactor = self.interactor_panel.GetInteractor()
+        
+        self.renderer = vtkRenderer()  # Main renderer for showing head and coil
         self.interactor.GetRenderWindow().AddRenderer(self.renderer)
 
         self.target_guide_renderer = vtkRenderer()  # Renderer for showing target info
         self.interactor.GetRenderWindow().AddRenderer(self.target_guide_renderer)
 
-        self.sizer = sizer = wx.BoxSizer(wx.VERTICAL)
+        self.sizer = sizer = wx.BoxSizer(wx.HORIZONTAL)
         self._init_gui()
 
         # Load the actor of the head surface
@@ -538,7 +557,7 @@ class TargetCoilPanel(wx.Panel):
             wx.EVT_TOGGLEBUTTON, partial(self.OnMoveRobotAwayButton, ctrl=robot_move_away_button)
         )
 
-        buttons_sizer = wx.FlexGridSizer(3, 5, 5)
+        buttons_sizer = wx.FlexGridSizer(1, 5, 5)
         buttons_sizer.AddMany(
             [
                 (target_mode_button),
@@ -547,18 +566,17 @@ class TargetCoilPanel(wx.Panel):
             ]
         )
 
-        # Panel for buttons
-        button_panel = wx.Panel(self, -1)  # , style=wx.TRANSPARENT_WINDOW)
-        button_panel.SetBackgroundColour(wx.Colour(255, 255, 255, 0))  # Transparent background
+        # Create button_panel, a child of interactor_panel
+        # For overlaying buttons in the top corner
+        # button_panel = wx.Panel(self.interactor_panel)
+        # button_panel.SetBackgroundColour(wx.Colour(255, 255, 255, 0))  # Transparent background
+        #button_panel.SetSizer(buttons_sizer)
 
-        button_panel_sizer = wx.BoxSizer(wx.VERTICAL)
-        # button_panel_sizer.Add(button_panel, 0, wx.ALIGN_RIGHT | wx.ALIGN_TOP)
-        button_panel_sizer.Add(button_panel, 0, wx.ALIGN_LEFT | wx.ALIGN_TOP)
+        #self.sizer.Add(button_panel, 0, wx.ALIGN_TOP | wx.ALIGN_LEFT, wx.ALL, 5)
+        self.sizer.Add(buttons_sizer, 0, wx.ALIGN_TOP | wx.ALIGN_LEFT, wx.ALL, 5)
 
-        # self.sizer.Add(button_panel_sizer, 0, wx.ALIGN_TOP | wx.ALIGN_RIGHT, wx.ALL, 5)
-        self.sizer.Add(self.interactor, 1, wx.EXPAND)
-        self.sizer.Add(button_panel_sizer, 0, wx.ALIGN_TOP | wx.ALIGN_LEFT, wx.ALL, 5)
-        button_panel.Raise()  # LUKATODO: Keep on top
+        # Add the main interactor to the sizer
+        self.sizer.Add(self.interactor_panel, 1, wx.EXPAND)
 
     def LoadActor(self, actor) -> None:
         self.renderer.AddActor(actor)
